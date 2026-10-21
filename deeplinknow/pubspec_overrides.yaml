@@ -1,0 +1,4 @@
+# Local development: use the sibling package instead of the published one. Not published (.pubignore).
+dependency_overrides:
+  deeplinknow_ios:
+    path: ../deeplinknow_ios
