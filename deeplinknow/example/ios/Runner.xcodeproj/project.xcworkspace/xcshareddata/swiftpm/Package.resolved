@@ -5,8 +5,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/deeplinknow/dln-ios",
       "state" : {
-        "revision" : "4826924a27fe27f6bf62d05f16feca92ba6475e0",
-        "version" : "1.2.0"
+        "revision" : "4bad6dc42356a2339ff985b818e7d04329489cfd",
+        "version" : "1.3.0"
       }
     }
   ],

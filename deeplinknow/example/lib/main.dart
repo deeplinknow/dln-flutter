@@ -5,6 +5,12 @@ import 'package:flutter/material.dart';
 /// `flutter run --dart-define=DLN_API_KEY=dln_pub_xxx`
 const apiKey = String.fromEnvironment('DLN_API_KEY');
 
+/// Optional API base URL, for testing against a local DeepLinkNow server:
+/// `--dart-define=DLN_BASE_URL=http://localhost:3000`. On the Android
+/// emulator, run `adb reverse tcp:3000 tcp:3000` first (the server routes by
+/// host, so `10.0.2.2` isn't served as the API). Empty uses deeplinknow.com.
+const baseUrl = String.fromEnvironment('DLN_BASE_URL');
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const ExampleApp());
@@ -32,7 +38,8 @@ class _ExampleAppState extends State<ExampleApp> {
   Future<void> _start() async {
     // 1. One call to initialize. Never throws: null means it failed (see lastError).
     final info = await DeepLinkNow.initialize(apiKey,
-        config: const DLNConfig(enableLogs: true));
+        config: DLNConfig(
+            enableLogs: true, baseUrl: baseUrl.isEmpty ? null : baseUrl));
     if (info == null) {
       _setStatus('Init failed: ${DeepLinkNow.lastError}');
       return;

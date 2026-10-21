@@ -4,4 +4,8 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug builds only: allow http:// so the example can talk to a local
+         server (DLN_BASE_URL=http://localhost:<port> with adb reverse).
+         Release builds keep Android's default (HTTPS only). -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>
