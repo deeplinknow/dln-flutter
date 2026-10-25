@@ -1,8 +1,12 @@
 # Changelog
 
-## 1.4.0
+## 1.4.1 (2026-10-25)
 
-Not published; the version is bumped with the native 1.4.0 releases.
+- Depends on the iOS `DeepLinkNow` SDK `~> 1.4.1` (CocoaPods) or `dln-ios` from `1.4.1` (Swift Package Manager), which carries the iOS fixes. No plugin code change.
+
+## 1.4.0 (2026-10-25)
+
+Published 2026-10-25 with the native 1.4.0 releases.
 
 - Observes the URLs iOS opens the app with, without claiming them: `application(_:open:options:)` and `application(_:continue:restorationHandler:)`, plus, on Flutter 3.38+, the UIScene callbacks (`addSceneDelegate`, found at run time so Flutter 3.24 still works). It hands them to `deeplinknow`'s `DeepLinkNow.links` (`startLinks` / `onLinkUrl`).
 - `isAppScheme`: whether a scheme is in the app's `CFBundleURLSchemes`.

@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 // Swift Package Manager manifest for Flutter's SPM integration: the iOS implementation of the
 // deeplinknow plugin. Depends on the native DeepLinkNow SDK
-// (https://github.com/deeplinknow/dln-ios, from 1.4.0; FLT-01, FLT-03).
+// (https://github.com/deeplinknow/dln-ios, from 1.4.1; FLT-01, FLT-03).
 
 import PackageDescription
 
@@ -16,7 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(name: "FlutterFramework", path: "../FlutterFramework"),
-        .package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.0")),
+        .package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.1")),
     ],
     targets: [
         .target(

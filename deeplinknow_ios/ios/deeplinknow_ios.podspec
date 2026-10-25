@@ -6,7 +6,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'deeplinknow_ios'
-  s.version          = '1.4.0'
+  s.version          = '1.4.1'
   s.summary          = 'iOS implementation of the deeplinknow Flutter plugin.'
   s.description      = <<-DESC
 Flutter plugin for DeepLinkNow. A thin method-channel wrapper over the native DeepLinkNow iOS SDK:
@@ -18,7 +18,7 @@ pasteboard handoff, then fingerprint matching, to return the link the user tappe
   s.source           = { :path => '.' }
   s.source_files     = 'deeplinknow_ios/Sources/deeplinknow_ios/**/*.swift'
   s.dependency 'Flutter'
-  s.dependency 'DeepLinkNow', '~> 1.4.0'
+  s.dependency 'DeepLinkNow', '~> 1.4.1'
   s.platform         = :ios, '13.0'
   # The DeepLinkNow pod is a static framework; a dynamic pod can't depend on it under
   # `use_frameworks!` (the Flutter Podfile default).

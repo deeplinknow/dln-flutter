@@ -1,7 +1,9 @@
 package com.deeplinknow.flutter
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import com.deeplinknow.DLNAppInfo
 import com.deeplinknow.DLNConfig
 import com.deeplinknow.DLNErrorCode
@@ -20,6 +22,7 @@ import com.deeplinknow.ParsedDeepLink
 import com.deeplinknow.QueryValue
 import com.deeplinknow.ReferrerData
 import com.deeplinknow.TimeProximityDetails
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.CoroutineScope
@@ -367,9 +370,56 @@ internal class DeepLinkNowPluginTest {
 
     @Test
     fun `SDK-87 FLT-26 isAppScheme answers from the manifest check, lowercased`() {
-        plugin.declaresScheme = { it == "myapp" }
+        plugin.declaresScheme = { it.startsWith("myapp:") }
         assertEquals(true, call("isAppScheme", mapOf("scheme" to "MyApp")).value)
         assertEquals(false, call("isAppScheme", mapOf("scheme" to "other")).value)
         assertEquals(false, call("isAppScheme", emptyMap()).value)
+    }
+
+    @Test
+    fun `SDK-87 FLT-33 isAppScheme probes the manifest with the real URL, so host-restricted filters match`() {
+        val probed = mutableListOf<String>()
+        // A filter like FlutterFlow's: scheme myapp, host myapp.com.
+        plugin.declaresScheme = { url -> probed += url; url.startsWith("myapp://myapp.com") }
+        val args = mapOf("scheme" to "myapp", "url" to "myapp://myapp.com/products/1?x=1")
+        assertEquals(true, call("isAppScheme", args).value)
+        assertEquals(listOf("myapp://myapp.com/products/1?x=1"), probed)
+        // A URL that doesn't belong to the scheme is never probed.
+        assertEquals(false, call("isAppScheme", mapOf("scheme" to "myapp", "url" to "other://x")).value)
+        assertEquals("myapp://dln", probed.last())
+    }
+
+    private fun attach(url: String): Pair<() -> Unit, ActivityPluginBinding> {
+        var posted: (() -> Unit)? = null
+        plugin.postToMain = { posted = it }
+        val activity = Mockito.mock(Activity::class.java)
+        val intent = viewIntent(url)
+        Mockito.`when`(activity.intent).thenReturn(intent)
+        val binding = Mockito.mock(ActivityPluginBinding::class.java)
+        Mockito.`when`(binding.activity).thenReturn(activity)
+        plugin.onAttachedToActivity(binding)
+        return { posted!!.invoke() } to binding
+    }
+
+    @Test
+    fun `SDK-88 FLT-32 an activity re-created from saved state does not forward its launch URL again`() {
+        val (runPosted, binding) = attach("https://myapp.deeplinknow.com/launch")
+        Mockito.verify(binding).addOnSaveStateListener(plugin)
+        val saved = Mockito.mock(Bundle::class.java)
+        Mockito.`when`(saved.getBoolean(DeepLinkNowPlugin.STATE_LAUNCH_READ, false)).thenReturn(true)
+        plugin.onRestoreInstanceState(saved) // same onCreate, after the attach
+        runPosted()
+        assertEquals(emptyList<String>(), call("startLinks").value)
+    }
+
+    @Test
+    fun `SDK-87 FLT-32 a fresh launch forwards its URL once the activity is created, and saves the mark`() {
+        val (runPosted, _) = attach("https://myapp.deeplinknow.com/launch")
+        plugin.onRestoreInstanceState(null)
+        runPosted()
+        assertEquals(listOf("https://myapp.deeplinknow.com/launch"), call("startLinks").value)
+        val out = Mockito.mock(Bundle::class.java)
+        plugin.onSaveInstanceState(out)
+        Mockito.verify(out).putBoolean(DeepLinkNowPlugin.STATE_LAUNCH_READ, true)
     }
 }

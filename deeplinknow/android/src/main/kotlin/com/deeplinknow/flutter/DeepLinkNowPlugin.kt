@@ -2,6 +2,9 @@ package com.deeplinknow.flutter
 
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import com.deeplinknow.DLN
 import com.deeplinknow.DLNAppInfo
 import com.deeplinknow.DLNConfig
@@ -40,7 +43,7 @@ interface DLNBackend {
     fun isValidDomain(host: String): Boolean
 }
 
-/** Forwards to the dln-android 1.4.0 public API. */
+/** Forwards to the dln-android 1.4.1 public API. */
 object DefaultDLNBackend : DLNBackend {
     override fun init(context: Context, apiKey: String, enableLogs: Boolean, baseUrl: String, timeoutMs: Long, retryAttempts: Int) =
         DLN.init(
@@ -82,10 +85,16 @@ object DefaultDLNBackend : DLNBackend {
  * Since 1.4.0 it also reads the URL that launched the activity and every `onNewIntent` URL, and
  * hands them to Dart (`startLinks`, then `onLinkUrl`) for `DeepLinkNow.links` (SDK-87, FLT-26).
  * It only observes: `onNewIntent` returns `false`, so other plugins still see the intent.
+ * An activity re-created from saved state (process death, then back through Recents) gets its
+ * launch intent again; that intent was already read, so it isn't forwarded (FLT-32).
  */
 class DeepLinkNowPlugin internal constructor(
     private val backend: DLNBackend,
-) : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware, PluginRegistry.NewIntentListener {
+) : FlutterPlugin,
+    MethodChannel.MethodCallHandler,
+    ActivityAware,
+    PluginRegistry.NewIntentListener,
+    ActivityPluginBinding.OnSaveInstanceStateListener {
 
     constructor() : this(DefaultDLNBackend)
 
@@ -98,17 +107,25 @@ class DeepLinkNowPlugin internal constructor(
     private var lastIntent: WeakReference<Intent>? = null
 
     /**
-     * SDK-87: whether the app's manifest declares [scheme] in a VIEW intent filter (an activity of
-     * this package answers `scheme://`). Tests replace it.
+     * FLT-32: the attached activity's launch intent, read once the activity's saved state is
+     * known. `onRestoreInstanceState` comes after `onAttachedToActivity`, in the same `onCreate`.
      */
-    internal var declaresScheme: (String) -> Boolean = { scheme ->
+    private var launchIntent: Intent? = null
+
+    /** Runs [block] after the current main-thread message (the activity's create). Tests replace it. */
+    internal var postToMain: (block: () -> Unit) -> Unit = { block -> Handler(Looper.getMainLooper()).post { block() } }
+
+    /**
+     * SDK-87, AND-36: whether the app's manifest has a VIEW intent filter that matches [url] (an
+     * activity of this package answers it). Probing with the real URL, not `scheme://dln`, keeps
+     * filters that also set `android:host` or a path (FlutterFlow's) working. Tests replace it.
+     */
+    internal var declaresScheme: (String) -> Boolean = { url ->
         val ctx = context
         if (ctx == null) {
             false
         } else {
-            val probe = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("$scheme://dln"))
-                .addCategory(Intent.CATEGORY_BROWSABLE)
-                .setPackage(ctx.packageName)
+            val probe = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).setPackage(ctx.packageName)
             @Suppress("DEPRECATION")
             ctx.packageManager.queryIntentActivities(probe, 0).isNotEmpty()
         }
@@ -151,7 +168,32 @@ class DeepLinkNowPlugin internal constructor(
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         attachActivity(binding)
-        handleIntent(binding.activity.intent)
+        launchIntent = binding.activity.intent
+        postToMain { forwardLaunchIntent() }
+    }
+
+    /** FLT-32: marks the activity's state, so a re-created activity knows its intent was read. */
+    override fun onSaveInstanceState(bundle: Bundle) {
+        try {
+            bundle.putBoolean(STATE_LAUNCH_READ, true)
+        } catch (e: Exception) {
+            // Losing the mark only risks one repeated open.
+        }
+    }
+
+    /** FLT-32: a re-created activity: its launch intent is the one read before; drop it. */
+    override fun onRestoreInstanceState(bundle: Bundle?) {
+        try {
+            if (bundle?.getBoolean(STATE_LAUNCH_READ, false) == true) launchIntent = null
+        } catch (e: Exception) {
+            // Forward it: a repeated open beats a lost one.
+        }
+    }
+
+    private fun forwardLaunchIntent() {
+        val intent = launchIntent ?: return
+        launchIntent = null
+        handleIntent(intent)
     }
 
     /** A rotation re-attaches the same activity: its intent was already read. */
@@ -162,6 +204,7 @@ class DeepLinkNowPlugin internal constructor(
     override fun onDetachedFromActivity() = detachActivity()
 
     override fun onNewIntent(intent: Intent): Boolean {
+        forwardLaunchIntent() // the launch URL first
         handleIntent(intent)
         return false
     }
@@ -169,10 +212,12 @@ class DeepLinkNowPlugin internal constructor(
     private fun attachActivity(binding: ActivityPluginBinding) {
         activityBinding = binding
         binding.addOnNewIntentListener(this)
+        binding.addOnSaveStateListener(this)
     }
 
     private fun detachActivity() {
         activityBinding?.removeOnNewIntentListener(this)
+        activityBinding?.removeOnSaveStateListener(this)
         activityBinding = null
     }
 
@@ -230,7 +275,10 @@ class DeepLinkNowPlugin internal constructor(
                 "startLinks" -> result.success(links.start())
                 "isAppScheme" -> {
                     val scheme = call.argument<String>("scheme")?.lowercase()
-                    result.success(scheme != null && declaresScheme(scheme))
+                    // The real URL (1.4.1); `scheme://dln` only for a caller that sends no URL.
+                    val url = call.argument<String>("url")?.takeIf { scheme != null && it.lowercase().startsWith("$scheme:") }
+                        ?: scheme?.let { "$it://dln" }
+                    result.success(url != null && declaresScheme(url))
                 }
                 "isValidDomain" -> {
                     val host = call.argument<String>("host")
@@ -287,5 +335,8 @@ class DeepLinkNowPlugin internal constructor(
 
     companion object {
         const val CHANNEL = "com.deeplinknow/flutter"
+
+        /** FLT-32: saved with the activity's state once its launch intent was read. */
+        const val STATE_LAUNCH_READ = "com.deeplinknow.flutter.LAUNCH_READ"
     }
 }

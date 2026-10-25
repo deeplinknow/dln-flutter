@@ -1,4 +1,4 @@
-// One link object for every open (1.4.0): SDK-86…92, FLT-25…31.
+// One link object for every open (1.4.0, fixes in 1.4.1): SDK-86…92, FLT-25…35.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -510,6 +510,88 @@ void main() {
       expect(link?.source, DLNLinkSource.scheme);
       expect(link?.fullPath, '/invite');
       expect(requests, 0);
+    });
+  });
+
+  group('1.4.1 fixes', () {
+    test('SDK-87 FLT-33 isAppScheme sends the URL, so Android can match host-restricted filters',
+        () async {
+      native.handlers['isAppScheme'] = (call) => (call.arguments as Map)['scheme'] == 'myapp';
+      launchUrls.add('myapp://myapp.com/products/1?x=1');
+      subscribe();
+
+      await start();
+
+      expect(native.callsTo('isAppScheme').single.arguments,
+          {'scheme': 'myapp', 'url': 'myapp://myapp.com/products/1?x=1'});
+      expect(received.single.source, DLNLinkSource.scheme);
+    });
+
+    test('SDK-87 FLT-34 a scheme link is delivered without a successful initialize', () async {
+      native.fails('initialize', code: 'network');
+      native.fails('checkDeferredDeepLink', code: 'notInitialized');
+      native.returns('isAppScheme', true);
+      // The native provisional rule (SDK-37): any <alias>.deeplinknow.com before init.
+      native.handlers['parseDeepLink'] = (call) {
+        final url = (call.arguments as Map)['url'] as String;
+        const prefix = 'https://scheme.deeplinknow.com';
+        if (!url.startsWith('$prefix/')) return null;
+        final rest = url.substring(prefix.length);
+        return {
+          'path': rest.split('?').first,
+          'queryParams': <String, Object?>{'x': '1'},
+          'fullPath': rest,
+          'url': url,
+        };
+      };
+      launchUrls.add('myapp://products/9?x=1');
+      subscribe();
+
+      await start();
+
+      final link = received.single;
+      expect(link.source, DLNLinkSource.scheme);
+      expect(link.fullPath, '/products/9?x=1');
+      expect(link.url, 'myapp://products/9?x=1');
+      expect(DeepLinkNow.isInitialized, isFalse);
+    });
+
+    test('SDK-24 FLT-35 a deferred check that failed runs again after a successful initialize',
+        () async {
+      native.fails('initialize', code: 'network');
+      native.fails('checkDeferredDeepLink', code: 'notInitialized');
+      subscribe();
+      await start();
+      expect(received, isEmpty);
+      expect(native.callsTo('checkDeferredDeepLink'), hasLength(1));
+
+      native
+        ..returns('initialize', Payloads.appInfo())
+        ..returns('checkDeferredDeepLink', Payloads.fingerprintLink());
+      await DeepLinkNow.initialize('dln_pub_test');
+      await pumpEventQueue();
+
+      expect(native.callsTo('checkDeferredDeepLink'), hasLength(2));
+      expect(received.single.type, DLNLinkType.deferred);
+      expect(native.callsTo('startLinks'), hasLength(1), reason: 'the platform URLs are read once');
+    });
+
+    test('SDK-24 FLT-35 an offline check runs again on the next listen; a finished one never does',
+        () async {
+      native.fails('checkDeferredDeepLink', code: 'network');
+      subscribe();
+      await start();
+      expect(received, isEmpty);
+
+      native.returns('checkDeferredDeepLink', Payloads.clipboardLink());
+      DeepLinkNow.listen();
+      await pumpEventQueue();
+      expect(received.single.source, DLNLinkSource.clipboard);
+
+      DeepLinkNow.listen();
+      await DeepLinkNow.initialize('dln_pub_test');
+      await pumpEventQueue();
+      expect(native.callsTo('checkDeferredDeepLink'), hasLength(2));
     });
   });
 

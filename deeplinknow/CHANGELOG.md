@@ -1,8 +1,17 @@
 # Changelog
 
-## 1.4.0
+## 1.4.1 (2026-10-25)
 
-Not published; the version is bumped with the native 1.4.0 releases (SDK-84).
+Fixes. Pins `com.deeplinknow:dln-android:1.4.1`; `deeplinknow_ios` 1.4.1 pins iOS `DeepLinkNow` `~> 1.4.1` (SDK-84).
+
+- Android: an activity re-created after process death (back through Recents, "Don't keep activities", low memory) no longer delivers its launch link again. The plugin saves a mark in the activity's state and skips the launch intent of a restored activity (FLT-32).
+- Android: a custom scheme is checked against the manifest with the real URL, so intent filters that also set `android:host` or a path (FlutterFlow's, for one) count. Before, those links were dropped (FLT-33).
+- Custom-scheme links are delivered without a successful `initialize`: they need no network (FLT-34).
+- A failed deferred check in `listen()` (offline, or `initialize` failed) runs again on the next `listen()` call or successful `initialize`, instead of never in that launch (SDK-24, FLT-35).
+
+## 1.4.0 (2026-10-25)
+
+Published 2026-10-25 with the native 1.4.0 releases (SDK-84).
 
 - `DeepLinkNow.links`, a broadcast `Stream<DLNLink>` with every open, deferred or direct, started by `DeepLinkNow.listen([DLNLinkOptions])`. The plugin reads the launch URL and later URLs itself: on Android with `ActivityAware` and `onNewIntent`, on iOS with the app-delegate callbacks and, on Flutter 3.38+, the UIScene callbacks. No extra package.
 - Direct opens: https links on your link domains, and your custom schemes (`options.schemes`, or the ones Info.plist or the manifest declares). The same URL twice within 3 seconds is one open. On a first launch with both, the deferred link comes first.

@@ -37,7 +37,7 @@ enum _CallKind { initialize, check, find }
 /// ```
 abstract final class DeepLinkNow {
   /// Plugin version. iOS, Android, React Native and Flutter share major.minor (SDK-84).
-  static const String sdkVersion = '1.4.0';
+  static const String sdkVersion = '1.4.1';
 
   /// The method channel to the native plugin.
   @visibleForTesting
@@ -99,6 +99,8 @@ abstract final class DeepLinkNow {
     } finally {
       // The link pipeline (listen) waits for the first initialize to finish, either way.
       if (!_initFinished.isCompleted) _initFinished.complete();
+      // SDK-24: a deferred check that failed (offline, or before this initialize) runs again.
+      if (_initialized) _retryDeferredCheck();
     }
   }
 
@@ -118,6 +120,20 @@ abstract final class DeepLinkNow {
     bool useClipboard = true,
     bool force = false,
   }) async {
+    final result = await _checkDeferred(
+      minConfidence: minConfidence,
+      useClipboard: useClipboard,
+      force: force,
+    );
+    return result.link;
+  }
+
+  /// [checkDeferredDeepLink], telling a failure (SDK-24) apart from "no link".
+  static Future<({DeferredDeepLink? link, bool failed})> _checkDeferred({
+    required double? minConfidence,
+    required bool useClipboard,
+    required bool force,
+  }) async {
     try {
       final raw = await channel.invokeMethod<Object?>('checkDeferredDeepLink', {
         'minConfidence': minConfidence,
@@ -126,10 +142,10 @@ abstract final class DeepLinkNow {
       });
       final link = raw == null ? null : DeferredDeepLink.fromMap(raw);
       _succeeded(_CallKind.check);
-      return link;
+      return (link: link, failed: false);
     } catch (e) {
       _failed(_CallKind.check, 'checkDeferredDeepLink', e);
-      return null;
+      return (link: null, failed: true);
     }
   }
 
@@ -230,6 +246,10 @@ abstract final class DeepLinkNow {
   static DLNLinkOptions _linkOptions = const DLNLinkOptions();
   static bool _listening = false;
   static bool _holding = false;
+  // The deferred check of [listen] (SDK-86): running, or finished without a failure. A failed
+  // check runs again on the next [listen] or successful [initialize] (SDK-24).
+  static bool _deferredRunning = false;
+  static bool _deferredDone = false;
   // The latest link of each kind, held (SDK-89) or waiting for a listener (SDK-86).
   static DLNLink? _pendingDeferred;
   static DLNLink? _pendingDirect;
@@ -273,27 +293,48 @@ abstract final class DeepLinkNow {
   ///
   /// Calling it again only updates the options: [DLNLinkOptions.hold] and
   /// [DLNLinkOptions.resolve] apply to links delivered after the call; the deferred check is not
-  /// run twice (SDK-91). Never throws.
+  /// run twice (SDK-91). A deferred check that failed (offline, or no successful [initialize]
+  /// yet) runs again on the next [listen] call or successful [initialize] (SDK-24). Never
+  /// throws.
   static void listen([DLNLinkOptions options = const DLNLinkOptions()]) {
     _linkOptions = options;
     _holding = options.hold;
-    if (_listening) return;
+    if (_listening) {
+      _retryDeferredCheck();
+      return;
+    }
     _listening = true;
+    _deferredRunning = true;
     channel.setMethodCallHandler(_onNativeCall);
     _enqueue(() async {
       await _initFinished.future;
-      final deferred = await checkDeferredDeepLink(
-        minConfidence: _linkOptions.minConfidence,
-        useClipboard: _linkOptions.useClipboard,
-        force: _linkOptions.force,
-      );
       // Deferred first when both are known at once (SDK-88): the URLs the platform side
       // buffered are only taken after the deferred check.
-      if (deferred != null) _deliver(DLNLink.fromDeferred(deferred));
+      await _runDeferredCheck();
       for (final url in await _startLinks()) {
         await _handleDirect(url);
       }
     });
+  }
+
+  static Future<void> _runDeferredCheck() async {
+    final result = await _checkDeferred(
+      minConfidence: _linkOptions.minConfidence,
+      useClipboard: _linkOptions.useClipboard,
+      force: _linkOptions.force,
+    );
+    _deferredRunning = false;
+    _deferredDone = !result.failed;
+    final deferred = result.link;
+    if (deferred != null) _deliver(DLNLink.fromDeferred(deferred));
+  }
+
+  /// SDK-24: runs the deferred check again when the last one failed. Not before the first
+  /// [initialize] has finished: the first run waits for it.
+  static void _retryDeferredCheck() {
+    if (!_listening || _deferredRunning || _deferredDone || !_initFinished.isCompleted) return;
+    _deferredRunning = true;
+    _enqueue(_runDeferredCheck);
   }
 
   /// The link kept by [DLNLinkOptions.hold] (SDK-89), or `null`: the next one
@@ -389,15 +430,23 @@ abstract final class DeepLinkNow {
     return _schemeLink(url.trim(), scheme);
   }
 
+  /// Parses a scheme link's path and query when the app's domains aren't known (no successful
+  /// [initialize]): any `<alias>.deeplinknow.com` host passes the native provisional rule
+  /// (SDK-37), and the host is never part of the result.
+  static const String _provisionalHost = 'scheme.deeplinknow.com';
+
   /// SDK-87 custom schemes. The path and query go through the native parse (SDK-30…37) as if
   /// they were on the app's primary domain, so Dart has no query parser (FLT-01); `url` stays
-  /// the scheme URL.
+  /// the scheme URL. No network: a scheme open is delivered without a successful initialize
+  /// (FLT-34), like the native SDKs and React Native.
   static Future<DLNLink?> _schemeLink(String url, String scheme) async {
-    if (systemSchemes.contains(scheme) || !await _isAppScheme(scheme)) return null;
-    // Needs the app's domains: before a successful initialize a scheme open isn't delivered.
-    final host = _appInfo?.primaryDomain;
-    if (host == null || host.isEmpty) return null;
-    final parsed = await parseDeepLink('https://$host${schemePathOf(url)}');
+    if (systemSchemes.contains(scheme) || !await _isAppScheme(scheme, url)) return null;
+    final primary = _appInfo?.primaryDomain;
+    ParsedDeepLink? parsed;
+    for (final host in {if (primary != null && primary.isNotEmpty) primary, _provisionalHost}) {
+      parsed = await parseDeepLink('https://$host${schemePathOf(url)}');
+      if (parsed != null) break;
+    }
     if (parsed == null) return null;
     return DLNLink(
       type: DLNLinkType.direct,
@@ -411,11 +460,13 @@ abstract final class DeepLinkNow {
     );
   }
 
-  static Future<bool> _isAppScheme(String scheme) async {
+  static Future<bool> _isAppScheme(String scheme, String url) async {
     final listed = _linkOptions.schemes.map((s) => s.toLowerCase()).toSet();
     if (listed.isNotEmpty) return listed.contains(scheme);
     try {
-      return await channel.invokeMethod<bool>('isAppScheme', {'scheme': scheme}) ?? false;
+      // The URL lets Android match intent filters that also set a host or path (FLT-33).
+      return await channel.invokeMethod<bool>('isAppScheme', {'scheme': scheme, 'url': url}) ??
+          false;
     } catch (e) {
       _warn('isAppScheme', e);
       return false;
@@ -506,6 +557,8 @@ abstract final class DeepLinkNow {
     _linkOptions = const DLNLinkOptions();
     _listening = false;
     _holding = false;
+    _deferredRunning = false;
+    _deferredDone = false;
     _pendingDeferred = null;
     _pendingDirect = null;
     _undeliveredDeferred = null;

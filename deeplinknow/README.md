@@ -106,9 +106,10 @@ await DeepLinkNow.initialize('dln_pub_…');
 ```
 
 - `link.type` is `DLNLinkType.deferred` or `.direct`. `link.source` says how it arrived (`clipboard`, `referrer`, `fingerprint`, `universalLink`, `appLink`, `scheme`).
-- Links arrive after `initialize` finishes, deferred first. If a link arrives before you subscribe, the latest one of each kind is replayed to your first listener.
+- Links arrive after `initialize` finishes, deferred first. If a link arrives before you subscribe, the latest one of each kind is replayed to your first listener. If the deferred check fails (offline, or `initialize` failed), it runs again on the next `listen()` call or successful `initialize` (1.4.1).
+- Custom-scheme links don't need the network: they arrive even when `initialize` failed (1.4.1).
 - The same URL twice within 3 seconds counts as one open.
-- Custom schemes: `myapp://products/123?x=1` arrives with `path` `/products/123`. By default the schemes in your Info.plist (`CFBundleURLSchemes`) or Android manifest count. Pass `DLNLinkOptions(schemes: ['myapp'])` to choose them yourself.
+- Custom schemes: `myapp://products/123?x=1` arrives with `path` `/products/123`. By default the schemes in your Info.plist (`CFBundleURLSchemes`) or Android manifest count. On Android, an intent filter that also sets a host or a path counts for the URLs it matches. Pass `DLNLinkOptions(schemes: ['myapp'])` to choose them yourself.
 - Turn off Flutter's own deep linking so the engine doesn't push the same path as a route: `FlutterDeepLinkingEnabled` = `NO` in `ios/Runner/Info.plist`, and `<meta-data android:name="flutter_deeplinking_enabled" android:value="false" />` inside the `<activity>` in `AndroidManifest.xml`.
 
 **Hold links until the user signs in.** Pass `hold: true` and the links wait in `DeepLinkNow.pendingLink` (`pendingLinks` has both kinds, deferred first) instead of reaching the stream:
@@ -153,7 +154,7 @@ All members are static on `DeepLinkNow`.
 | `parseDeepLink(url)` | `Future<ParsedDeepLink?>` | `{path, queryParams, fullPath, url}`, or `null` if not your link |
 | `isValidDomain(host)` | `Future<bool>` | Whether the host is one of your link domains |
 | `lastError` | `DLNError?` | Last failure of `initialize`, `checkDeferredDeepLink` or `findDeferredUser`; cleared by the next success of the same call |
-| `sdkVersion` | `String` | `1.4.0` |
+| `sdkVersion` | `String` | `1.4.1` |
 | `links` *(1.4.0)* | `Stream<DLNLink>` | Every open, deferred or direct (broadcast) |
 | `listen([options])` *(1.4.0)* | `void` | Starts `links`. `DLNLinkOptions(minConfidence, useClipboard, force, hold, resolve, schemes)` |
 | `pendingLink` / `pendingLinks` *(1.4.0)* | `DLNLink?` / `List<DLNLink>` | Links kept by `hold: true`, deferred first |
@@ -188,7 +189,7 @@ if (link == null && DeepLinkNow.lastError != null) {
 
 ## FlutterFlow
 
-1. In **Custom Code → Dependencies** (or the action's **Pubspec Dependencies** field), add `deeplinknow: ^1.4.0`.
+1. In **Custom Code → Dependencies** (or the action's **Pubspec Dependencies** field), add `deeplinknow: ^1.4.1`.
 2. Create a custom action `getDeferredDeepLink` with one `String` argument `apiKey`, return type `String` (nullable):
 
 ```dart

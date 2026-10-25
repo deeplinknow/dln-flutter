@@ -48,23 +48,23 @@ void main() {
   });
 
   group('native SDK pins', () {
-    test('FLT-03 iOS CocoaPods depends on DeepLinkNow ~> 1.4.0', () {
-      expect(read(iosPodspec), contains("s.dependency 'DeepLinkNow', '~> 1.4.0'"));
+    test('FLT-03 iOS CocoaPods depends on DeepLinkNow ~> 1.4.1', () {
+      expect(read(iosPodspec), contains("s.dependency 'DeepLinkNow', '~> 1.4.1'"));
     });
 
-    test('FLT-03 iOS Swift Package Manager depends on dln-ios from 1.4.0 (same minor)', () {
+    test('FLT-03 iOS Swift Package Manager depends on dln-ios from 1.4.1 (same minor)', () {
       final manifest = read(iosPackageSwift);
       expect(
         manifest,
         contains(
-            '.package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.0"))'),
+            '.package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.1"))'),
       );
       expect(manifest, contains('.product(name: "DeepLinkNow", package: "dln-ios")'));
     });
 
-    test('FLT-03 Android depends on com.deeplinknow:dln-android:1.4.0', () {
+    test('FLT-03 Android depends on com.deeplinknow:dln-android:1.4.1', () {
       expect(read('android/build.gradle.kts'),
-          contains('implementation("com.deeplinknow:dln-android:1.4.0")'));
+          contains('implementation("com.deeplinknow:dln-android:1.4.1")'));
     });
   });
 
