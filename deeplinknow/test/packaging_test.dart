@@ -184,6 +184,7 @@ void main() {
         'isValidDomain',
         'startLinks',
         'isAppScheme',
+        'parseSchemePath',
       ];
       final dart = read('lib/src/deeplinknow.dart');
       final swift = read(iosPlugin);

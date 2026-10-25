@@ -273,6 +273,18 @@ class DeepLinkNowPlugin internal constructor(
                     result.success(url?.let { backend.parseDeepLink(it) }?.let { DLNFlutterConverters.parsed(it) })
                 }
                 "startLinks" -> result.success(links.start())
+                "parseSchemePath" -> {
+                    // SDK-87, FLT-34: a scheme link's path and query, parsed on the primary domain,
+                    // or on a provisional link host (SDK-37) before a successful initialize.
+                    val path = call.argument<String>("path")
+                    val domain = call.argument<String>("domain")?.takeIf { it.isNotEmpty() }
+                    val parsed = path?.let { p ->
+                        listOfNotNull(domain, PROVISIONAL_SCHEME_HOST).asSequence()
+                            .mapNotNull { backend.parseDeepLink("https://$it$p") }
+                            .firstOrNull()
+                    }
+                    result.success(parsed?.let { DLNFlutterConverters.parsed(it) })
+                }
                 "isAppScheme" -> {
                     val scheme = call.argument<String>("scheme")?.lowercase()
                     // The real URL (1.4.1); `scheme://dln` only for a caller that sends no URL.
@@ -338,5 +350,8 @@ class DeepLinkNowPlugin internal constructor(
 
         /** FLT-32: saved with the activity's state once its launch intent was read. */
         const val STATE_LAUNCH_READ = "com.deeplinknow.flutter.LAUNCH_READ"
+
+        /** FLT-34: any `<alias>.deeplinknow.com` host passes the SDK's pre-init rule (SDK-37). */
+        const val PROVISIONAL_SCHEME_HOST = "scheme.deeplinknow.com"
     }
 }

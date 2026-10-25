@@ -430,22 +430,22 @@ abstract final class DeepLinkNow {
     return _schemeLink(url.trim(), scheme);
   }
 
-  /// Parses a scheme link's path and query when the app's domains aren't known (no successful
-  /// [initialize]): any `<alias>.deeplinknow.com` host passes the native provisional rule
-  /// (SDK-37), and the host is never part of the result.
-  static const String _provisionalHost = 'scheme.deeplinknow.com';
-
-  /// SDK-87 custom schemes. The path and query go through the native parse (SDK-30…37) as if
-  /// they were on the app's primary domain, so Dart has no query parser (FLT-01); `url` stays
-  /// the scheme URL. No network: a scheme open is delivered without a successful initialize
-  /// (FLT-34), like the native SDKs and React Native.
+  /// SDK-87 custom schemes. The native plugin parses the path and query (SDK-30…37) on the
+  /// app's primary domain, or on a provisional link host before a successful [initialize], so
+  /// Dart has no query parser or host rule (FLT-01); `url` stays the scheme URL. No network: a
+  /// scheme open is delivered without a successful initialize (FLT-34), like the native SDKs and
+  /// React Native.
   static Future<DLNLink?> _schemeLink(String url, String scheme) async {
     if (systemSchemes.contains(scheme) || !await _isAppScheme(scheme, url)) return null;
-    final primary = _appInfo?.primaryDomain;
     ParsedDeepLink? parsed;
-    for (final host in {if (primary != null && primary.isNotEmpty) primary, _provisionalHost}) {
-      parsed = await parseDeepLink('https://$host${schemePathOf(url)}');
-      if (parsed != null) break;
+    try {
+      final raw = await channel.invokeMethod<Object?>('parseSchemePath', {
+        'path': schemePathOf(url),
+        'domain': _appInfo?.primaryDomain,
+      });
+      parsed = raw == null ? null : ParsedDeepLink.fromMap(raw);
+    } catch (e) {
+      _warn('parseSchemePath', e);
     }
     if (parsed == null) return null;
     return DLNLink(

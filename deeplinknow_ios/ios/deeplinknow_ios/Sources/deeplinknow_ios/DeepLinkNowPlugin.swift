@@ -97,6 +97,16 @@ public final class DeepLinkNowPlugin: NSObject, FlutterPlugin {
             Self.run(result) { await DeepLinkNow.hasDeepLinkTokenAsync() }
         case "parseDeepLink":
             result((args["url"] as? String).flatMap(Self.parseDeepLink))
+        case "parseSchemePath":
+            // SDK-87, FLT-34: a scheme link's path and query, parsed on the primary domain,
+            // or on a provisional link host (SDK-37) before a successful initialize.
+            let path = args["path"] as? String
+            let domain = (args["domain"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let parsed = path.flatMap { path in
+                [domain, Self.provisionalSchemeHost].compactMap { $0 }.lazy
+                    .compactMap { Self.parseDeepLink("https://\($0)\(path)") }.first
+            }
+            result(parsed)
         case "isValidDomain":
             result((args["host"] as? String).map { DeepLinkNow.isValidDomain($0) } ?? false)
         default:
@@ -260,6 +270,9 @@ public final class DeepLinkNowPlugin: NSObject, FlutterPlugin {
     }
 
     // MARK: - Converters
+
+    /// FLT-34: any `<alias>.deeplinknow.com` host passes the SDK's pre-init rule (SDK-37).
+    static let provisionalSchemeHost = "scheme.deeplinknow.com"
 
     static func parseDeepLink(_ urlString: String) -> [String: Any]? {
         guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)),

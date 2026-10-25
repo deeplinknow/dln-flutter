@@ -55,6 +55,10 @@ void main() {
       ..returns('initialize', Payloads.appInfo())
       ..returns('checkDeferredDeepLink', null);
     native.handlers['parseDeepLink'] = (call) => _parse((call.arguments as Map)['url'] as String);
+    native.handlers['parseSchemePath'] = (call) {
+      final args = call.arguments as Map;
+      return _parse('https://${args['domain'] ?? 'scheme.deeplinknow.com'}${args['path']}');
+    };
     native.handlers['startLinks'] = (_) {
       final urls = [...launchUrls];
       launchUrls.clear();
@@ -470,9 +474,9 @@ void main() {
       expect(link.fullPath, '/products/123?x=1');
       expect(link.url, 'myapp://products/123?x=1', reason: 'the scheme URL, dln stripped');
       expect(link.deeplinkId, isNull);
-      expect(native.callsTo('parseDeepLink').last.arguments,
-          {'url': 'https://go.myapp.com/products/123?x=1#dln=fp_1'},
-          reason: 'parsed natively as if on the primary domain (FLT-01)');
+      expect(native.callsTo('parseSchemePath').last.arguments,
+          {'path': '/products/123?x=1#dln=fp_1', 'domain': 'go.myapp.com'},
+          reason: 'parsed natively on the primary domain (FLT-01)');
     });
 
     test('SDK-87 FLT-26 undeclared and system schemes are not delivered', () async {
@@ -531,17 +535,16 @@ void main() {
       native.fails('initialize', code: 'network');
       native.fails('checkDeferredDeepLink', code: 'notInitialized');
       native.returns('isAppScheme', true);
-      // The native provisional rule (SDK-37): any <alias>.deeplinknow.com before init.
-      native.handlers['parseDeepLink'] = (call) {
-        final url = (call.arguments as Map)['url'] as String;
-        const prefix = 'https://scheme.deeplinknow.com';
-        if (!url.startsWith('$prefix/')) return null;
-        final rest = url.substring(prefix.length);
+      // The native plugin parses on its provisional host before init (SDK-37).
+      native.handlers['parseSchemePath'] = (call) {
+        final args = call.arguments as Map;
+        expect(args['domain'], isNull);
+        final path = args['path'] as String;
         return {
-          'path': rest.split('?').first,
+          'path': path.split('?').first,
           'queryParams': <String, Object?>{'x': '1'},
-          'fullPath': rest,
-          'url': url,
+          'fullPath': path,
+          'url': 'https://scheme.deeplinknow.com$path',
         };
       };
       launchUrls.add('myapp://products/9?x=1');
