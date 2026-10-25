@@ -1,5 +1,5 @@
 group = "com.deeplinknow.flutter"
-version = "1.3.0"
+version = "1.4.0"
 
 buildscript {
     val kotlinVersion = "2.4.0"
@@ -81,7 +81,7 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 dependencies {
     // The native SDK does all deferred-link work (FLT-01). Keep in step with SDK-84 (FLT-03).
-    implementation("com.deeplinknow:dln-android:1.3.0")
+    implementation("com.deeplinknow:dln-android:1.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")

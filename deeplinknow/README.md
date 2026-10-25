@@ -95,9 +95,7 @@ final link = await DeepLinkNow.checkDeferredDeepLink(minConfidence: 50);
 
 or look at `link.source` and `link.matchQuality` yourself. `minConfidence` is off by default.
 
-## Every open in one stream (1.4.0, unreleased)
-
-> Coming in 1.4.0. Not in the 1.3.0 release on pub.dev yet.
+## Every open in one stream (1.4.0)
 
 `DeepLinkNow.links` hands you the same `DLNLink` whether the link came through the install (deferred) or opened the installed app (a Universal Link, an App Link, or your app's URL scheme). The plugin reads the launch URL and later URLs itself, so there's nothing to forward:
 
@@ -155,7 +153,7 @@ All members are static on `DeepLinkNow`.
 | `parseDeepLink(url)` | `Future<ParsedDeepLink?>` | `{path, queryParams, fullPath, url}`, or `null` if not your link |
 | `isValidDomain(host)` | `Future<bool>` | Whether the host is one of your link domains |
 | `lastError` | `DLNError?` | Last failure of `initialize`, `checkDeferredDeepLink` or `findDeferredUser`; cleared by the next success of the same call |
-| `sdkVersion` | `String` | `1.3.0` |
+| `sdkVersion` | `String` | `1.4.0` |
 | `links` *(1.4.0)* | `Stream<DLNLink>` | Every open, deferred or direct (broadcast) |
 | `listen([options])` *(1.4.0)* | `void` | Starts `links`. `DLNLinkOptions(minConfidence, useClipboard, force, hold, resolve, schemes)` |
 | `pendingLink` / `pendingLinks` *(1.4.0)* | `DLNLink?` / `List<DLNLink>` | Links kept by `hold: true`, deferred first |
@@ -190,7 +188,7 @@ if (link == null && DeepLinkNow.lastError != null) {
 
 ## FlutterFlow
 
-1. In **Custom Code → Dependencies** (or the action's **Pubspec Dependencies** field), add `deeplinknow: ^1.3.0`.
+1. In **Custom Code → Dependencies** (or the action's **Pubspec Dependencies** field), add `deeplinknow: ^1.4.0`.
 2. Create a custom action `getDeferredDeepLink` with one `String` argument `apiKey`, return type `String` (nullable):
 
 ```dart

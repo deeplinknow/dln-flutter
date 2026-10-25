@@ -40,7 +40,7 @@ interface DLNBackend {
     fun isValidDomain(host: String): Boolean
 }
 
-/** Forwards to the dln-android 1.3.0 public API. */
+/** Forwards to the dln-android 1.4.0 public API. */
 object DefaultDLNBackend : DLNBackend {
     override fun init(context: Context, apiKey: String, enableLogs: Boolean, baseUrl: String, timeoutMs: Long, retryAttempts: Int) =
         DLN.init(

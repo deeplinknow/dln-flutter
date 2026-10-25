@@ -21,11 +21,11 @@ String pubspecVersion() =>
 
 void main() {
   group('version (SDK-84)', () {
-    test('FLT-02 the pub package is deeplinknow 1.3.x, in step with sdkVersion', () {
+    test('FLT-02 the pub package is deeplinknow 1.4.x, in step with sdkVersion', () {
       final pubspec = read('pubspec.yaml');
       expect(RegExp(r'^name:\s*deeplinknow\s*$', multiLine: true).hasMatch(pubspec), isTrue);
       expect(pubspecVersion(), DeepLinkNow.sdkVersion);
-      expect(DeepLinkNow.sdkVersion, startsWith('1.3.'));
+      expect(DeepLinkNow.sdkVersion, startsWith('1.4.'));
     });
 
     test('FLT-02 deeplinknow_ios has the same version and deeplinknow pins its minor', () {
@@ -48,23 +48,23 @@ void main() {
   });
 
   group('native SDK pins', () {
-    test('FLT-03 iOS CocoaPods depends on DeepLinkNow ~> 1.3.0', () {
-      expect(read(iosPodspec), contains("s.dependency 'DeepLinkNow', '~> 1.3.0'"));
+    test('FLT-03 iOS CocoaPods depends on DeepLinkNow ~> 1.4.0', () {
+      expect(read(iosPodspec), contains("s.dependency 'DeepLinkNow', '~> 1.4.0'"));
     });
 
-    test('FLT-03 iOS Swift Package Manager depends on dln-ios from 1.3.0 (same minor)', () {
+    test('FLT-03 iOS Swift Package Manager depends on dln-ios from 1.4.0 (same minor)', () {
       final manifest = read(iosPackageSwift);
       expect(
         manifest,
         contains(
-            '.package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.3.0"))'),
+            '.package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.0"))'),
       );
       expect(manifest, contains('.product(name: "DeepLinkNow", package: "dln-ios")'));
     });
 
-    test('FLT-03 Android depends on com.deeplinknow:dln-android:1.3.0', () {
+    test('FLT-03 Android depends on com.deeplinknow:dln-android:1.4.0', () {
       expect(read('android/build.gradle.kts'),
-          contains('implementation("com.deeplinknow:dln-android:1.3.0")'));
+          contains('implementation("com.deeplinknow:dln-android:1.4.0")'));
     });
   });
 

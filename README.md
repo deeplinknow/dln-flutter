@@ -27,7 +27,7 @@ flutter build ios --no-codesign --debug
 
 ## Publishing
 
-Publish order: the native SDKs 1.3.0 first (iOS `DeepLinkNow` on CocoaPods and the `dln-ios` 1.3.0 tag, Android `com.deeplinknow:dln-android:1.3.0` on Maven Central), then `deeplinknow_ios`, then `deeplinknow` (it depends on `deeplinknow_ios` `>=1.3.0 <1.4.0`):
+Publish order: the native SDKs 1.4.0 first (iOS `DeepLinkNow` on CocoaPods and the `dln-ios` 1.4.0 tag, Android `com.deeplinknow:dln-android:1.4.0` on Maven Central), then `deeplinknow_ios`, then `deeplinknow` (it depends on `deeplinknow_ios` `>=1.4.0 <1.5.0`):
 
 ```sh
 cd deeplinknow_ios && flutter pub publish

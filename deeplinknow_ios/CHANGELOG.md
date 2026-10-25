@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.4.0)
+## 1.4.0
 
 Not published; the version is bumped with the native 1.4.0 releases.
 
