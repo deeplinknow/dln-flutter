@@ -1,6 +1,7 @@
 package com.deeplinknow.flutter
 
 import android.content.Context
+import android.content.Intent
 import com.deeplinknow.DLNAppInfo
 import com.deeplinknow.DLNConfig
 import com.deeplinknow.DLNErrorCode
@@ -26,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import org.mockito.Mockito
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -295,5 +297,79 @@ internal class DeepLinkNowPluginTest {
     @Test
     fun `FLT-01 unknown methods are not implemented`() {
         assertTrue(call("getPlatformVersion").notImplemented)
+    }
+
+    private fun viewIntent(url: String?, flags: Int = 0): Intent {
+        val intent = Mockito.mock(Intent::class.java)
+        Mockito.`when`(intent.action).thenReturn(Intent.ACTION_VIEW)
+        Mockito.`when`(intent.dataString).thenReturn(url)
+        Mockito.`when`(intent.flags).thenReturn(flags)
+        return intent
+    }
+
+    @Test
+    fun `SDK-87 FLT-26 the launch URL is buffered until Dart calls startLinks`() {
+        plugin.handleIntent(viewIntent("https://myapp.deeplinknow.com/launch"))
+        assertEquals(listOf("https://myapp.deeplinknow.com/launch"), call("startLinks").value)
+        assertEquals(emptyList<String>(), call("startLinks").value, "taken once")
+    }
+
+    @Test
+    fun `SDK-87 FLT-26 only ACTION_VIEW intents with data are links`() {
+        val main = Mockito.mock(Intent::class.java)
+        Mockito.`when`(main.action).thenReturn(Intent.ACTION_MAIN)
+        plugin.handleIntent(main)
+        plugin.handleIntent(viewIntent(null))
+        plugin.handleIntent(null)
+        assertEquals(emptyList<String>(), call("startLinks").value)
+    }
+
+    @Test
+    fun `SDK-88 FLT-27 the same intent object (onCreate plus onNewIntent) is read once`() {
+        val intent = viewIntent("https://myapp.deeplinknow.com/a")
+        plugin.handleIntent(intent)
+        assertFalse(plugin.onNewIntent(intent), "observes only, never consumes the intent")
+        assertEquals(listOf("https://myapp.deeplinknow.com/a"), call("startLinks").value)
+    }
+
+    @Test
+    fun `SDK-88 FLT-27 an activity reopened from Recents does not replay its link`() {
+        plugin.handleIntent(viewIntent("https://myapp.deeplinknow.com/a", DLNLinkRelay.FLAG_LAUNCHED_FROM_HISTORY))
+        assertEquals(emptyList<String>(), call("startLinks").value)
+    }
+
+    @Test
+    fun `SDK-87 FLT-26 after startLinks each new URL is pushed, and a failed push is buffered again`() {
+        val pushed = mutableListOf<String>()
+        var answer = true
+        val relay = DLNLinkRelay { url, delivered ->
+            pushed += url
+            delivered(answer)
+        }
+        relay.offer("https://a/1")
+        assertEquals(listOf("https://a/1"), relay.start())
+        relay.offer("https://a/2")
+        assertEquals(listOf("https://a/2"), pushed)
+        answer = false // Dart has no handler (hot restart)
+        relay.offer("https://a/3")
+        relay.offer("https://a/4")
+        assertEquals(listOf("https://a/2", "https://a/3"), pushed, "stops pushing after a failed push")
+        assertEquals(listOf("https://a/3", "https://a/4"), relay.start())
+    }
+
+    @Test
+    fun `SDK-87 FLT-26 without a Flutter engine a URL stays buffered`() {
+        plugin.handleIntent(viewIntent("https://myapp.deeplinknow.com/x"))
+        call("startLinks")
+        plugin.onNewIntent(viewIntent("https://myapp.deeplinknow.com/y"))
+        assertEquals(listOf("https://myapp.deeplinknow.com/y"), call("startLinks").value)
+    }
+
+    @Test
+    fun `SDK-87 FLT-26 isAppScheme answers from the manifest check, lowercased`() {
+        plugin.declaresScheme = { it == "myapp" }
+        assertEquals(true, call("isAppScheme", mapOf("scheme" to "MyApp")).value)
+        assertEquals(false, call("isAppScheme", mapOf("scheme" to "other")).value)
+        assertEquals(false, call("isAppScheme", emptyMap()).value)
     }
 }

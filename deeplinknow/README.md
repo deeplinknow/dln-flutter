@@ -95,7 +95,38 @@ final link = await DeepLinkNow.checkDeferredDeepLink(minConfidence: 50);
 
 or look at `link.source` and `link.matchQuality` yourself. `minConfidence` is off by default.
 
-## Links that open the installed app
+## Every open in one stream (1.4.0, unreleased)
+
+> Coming in 1.4.0. Not in the 1.3.0 release on pub.dev yet.
+
+`DeepLinkNow.links` hands you the same `DLNLink` whether the link came through the install (deferred) or opened the installed app (a Universal Link, an App Link, or your app's URL scheme). The plugin reads the launch URL and later URLs itself, so there's nothing to forward:
+
+```dart
+DeepLinkNow.links.listen((link) => router.go(link.fullPath));
+DeepLinkNow.listen();                       // start it; before or after initialize is fine
+await DeepLinkNow.initialize('dln_pub_…');
+```
+
+- `link.type` is `DLNLinkType.deferred` or `.direct`. `link.source` says how it arrived (`clipboard`, `referrer`, `fingerprint`, `universalLink`, `appLink`, `scheme`).
+- Links arrive after `initialize` finishes, deferred first. If a link arrives before you subscribe, the latest one of each kind is replayed to your first listener.
+- The same URL twice within 3 seconds counts as one open.
+- Custom schemes: `myapp://products/123?x=1` arrives with `path` `/products/123`. By default the schemes in your Info.plist (`CFBundleURLSchemes`) or Android manifest count. Pass `DLNLinkOptions(schemes: ['myapp'])` to choose them yourself.
+- Turn off Flutter's own deep linking so the engine doesn't push the same path as a route: `FlutterDeepLinkingEnabled` = `NO` in `ios/Runner/Info.plist`, and `<meta-data android:name="flutter_deeplinking_enabled" android:value="false" />` inside the `<activity>` in `AndroidManifest.xml`.
+
+**Hold links until the user signs in.** Pass `hold: true` and the links wait in `DeepLinkNow.pendingLink` (`pendingLinks` has both kinds, deferred first) instead of reaching the stream:
+
+```dart
+DeepLinkNow.listen(const DLNLinkOptions(hold: true));
+// …after sign-in:
+DeepLinkNow.releasePendingLink();   // delivers them and stops holding
+// or DeepLinkNow.clearPendingLink() to drop them (still holding)
+```
+
+**Links imported from Firebase.** `resolve: true` looks up each https open on your domains (`GET /api/v1/sdk/resolve`) and fills `deeplinkId`, `targetUrl`, `campaignId` and `metadata`. That adds a network call to every open, bounded by your timeout, and the link still arrives unresolved when the lookup fails or finds nothing. `DeepLinkNow.resolveLink(url)` does the same for one URL.
+
+`#dln=…` fragments that the link page adds are removed from `url` and `fullPath`.
+
+## Links that open the installed app (1.3.0)
 
 When the app is already installed, a tap on your link opens it directly (Universal Link / App Link). Receive the URL with a package such as [`app_links`](https://pub.dev/packages/app_links), then parse it with the same rules as the deferred result:
 
@@ -125,6 +156,11 @@ All members are static on `DeepLinkNow`.
 | `isValidDomain(host)` | `Future<bool>` | Whether the host is one of your link domains |
 | `lastError` | `DLNError?` | Last failure of `initialize`, `checkDeferredDeepLink` or `findDeferredUser`; cleared by the next success of the same call |
 | `sdkVersion` | `String` | `1.3.0` |
+| `links` *(1.4.0)* | `Stream<DLNLink>` | Every open, deferred or direct (broadcast) |
+| `listen([options])` *(1.4.0)* | `void` | Starts `links`. `DLNLinkOptions(minConfidence, useClipboard, force, hold, resolve, schemes)` |
+| `pendingLink` / `pendingLinks` *(1.4.0)* | `DLNLink?` / `List<DLNLink>` | Links kept by `hold: true`, deferred first |
+| `releasePendingLink()` / `clearPendingLink()` *(1.4.0)* | `void` | Deliver them and end the hold / drop them |
+| `resolveLink(url)` *(1.4.0)* | `Future<DLNLink?>` | Looks the link up on the server; unresolved on 404 or failure, `null` if not your link |
 
 `parseDeepLink` and `isValidDomain` are synchronous in the native SDKs but return a `Future` here, because Flutter platform channels are asynchronous.
 

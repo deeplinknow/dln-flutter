@@ -1,6 +1,8 @@
 // Typed results of the DeepLinkNow plugin. Each class is built from the plain map the native
 // plugin sends over the method channel; the shapes are the shared SDK contract (SDK-15, SDK-20).
 
+import 'link.dart' show stripDlnFragment;
+
 /// Server confidence thresholds (SDK-16): HIGH ≥ 75, MEDIUM ≥ 50, LOW ≥ 30.
 abstract final class ConfidenceThresholds {
   /// Lowest score labelled HIGH.
@@ -350,8 +352,9 @@ class ParsedDeepLink {
     return ParsedDeepLink(
       path: _str(m, 'path'),
       queryParams: _query(m['queryParams'], 'queryParams'),
-      fullPath: _str(m, 'fullPath'),
-      url: _str(m, 'url'),
+      // SDK-92: a `#dln=<click id>` fragment parameter never reaches the app.
+      fullPath: stripDlnFragment(_str(m, 'fullPath')),
+      url: stripDlnFragment(_str(m, 'url')),
     );
   }
 
@@ -395,8 +398,8 @@ class DeferredDeepLink {
     return DeferredDeepLink(
       path: _str(m, 'path'),
       queryParams: _query(m['queryParams'], 'queryParams'),
-      fullPath: _str(m, 'fullPath'),
-      url: _str(m, 'url'),
+      fullPath: stripDlnFragment(_str(m, 'fullPath')),
+      url: stripDlnFragment(_str(m, 'url')),
       source: DeferredDeepLinkSource.parse(_str(m, 'source')),
       confidenceScore: _num(m, 'confidenceScore'),
       matchQuality: MatchQuality.parse(_str(m, 'matchQuality')),

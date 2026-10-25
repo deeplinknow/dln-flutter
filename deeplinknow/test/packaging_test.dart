@@ -82,7 +82,10 @@ void main() {
       // AGP 8 needs the Kotlin plugin, and older Flutter tooling doesn't apply it for plugins.
       // AGP 9 compiles Kotlin itself and rejects the plugin, so it is applied only below 9.
       expect(gradle, contains('com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION'));
-      expect(gradle, contains('if (agpMajor < 9 && !pluginManager.hasPlugin("org.jetbrains.kotlin.android"))'));
+      expect(
+          gradle,
+          contains(
+              'if (agpMajor < 9 && !pluginManager.hasPlugin("org.jetbrains.kotlin.android"))'));
       expect(gradle, contains('apply(plugin = "org.jetbrains.kotlin.android")'));
       // The `kotlin { compilerOptions }` accessor doesn't exist when the plugin isn't in `plugins {}`.
       expect(RegExp(r'^kotlin\s*\{', multiLine: true).hasMatch(gradle), isFalse);
@@ -123,19 +126,41 @@ void main() {
 
   group('layering', () {
     test('FLT-01 the Dart layer has no network, clipboard or host-rule code', () {
-      final dart = Directory('lib')
+      // The one exception is SDK-90's resolve request (FLT-30), which lives in its own files.
+      const resolveFiles = ['resolve_http.dart', 'resolve_http_io.dart', 'resolve_http_stub.dart'];
+      final files = Directory('lib')
           .listSync(recursive: true)
           .whereType<File>()
-          .where((f) => f.path.endsWith('.dart'))
+          .where((f) => f.path.endsWith('.dart'));
+      String code(Iterable<File> fs) => fs
           .expand((f) => f.readAsLinesSync())
           // Code only: doc comments may mention domains and the clipboard.
           .where((line) => !line.trimLeft().startsWith('//'))
           .join('\n');
+      final dart = code(files.where((f) => !resolveFiles.any(f.path.endsWith)));
       expect(dart, isNot(contains("import 'dart:io'")));
       expect(dart, isNot(contains('package:http')));
+      expect(dart, isNot(contains('HttpClient')));
       expect(dart, isNot(contains('Clipboard.')));
       expect(dart, isNot(contains('.deeplinknow.com')));
       expect(dart, isNot(contains('Uri.parse')));
+      final all = code(files);
+      expect(all, isNot(contains('package:http')), reason: 'no HTTP package dependency');
+      expect(all, isNot(contains('Clipboard.')));
+      expect(all, isNot(contains('.deeplinknow.com')));
+    });
+
+    test('FLT-30 dart:io is imported only by the resolve transport, behind a conditional import',
+        () {
+      final importers = Directory('lib')
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.readAsStringSync().contains("import 'dart:io'"))
+          .map((f) => f.uri.pathSegments.last)
+          .toList();
+      expect(importers, ['resolve_http_io.dart']);
+      expect(read('lib/src/resolve_http.dart'),
+          contains("if (dart.library.io) 'resolve_http_io.dart'"));
     });
 
     test('FLT-01 iOS and Android use the same single method channel name as Dart', () {
@@ -157,6 +182,8 @@ void main() {
         'hasDeepLinkToken',
         'parseDeepLink',
         'isValidDomain',
+        'startLinks',
+        'isAppScheme',
       ];
       final dart = read('lib/src/deeplinknow.dart');
       final swift = read(iosPlugin);
@@ -166,6 +193,26 @@ void main() {
         expect(swift, contains('case "$m":'), reason: 'iOS handles $m');
         expect(kotlin, contains('"$m" ->'), reason: 'Android handles $m');
       }
+    });
+
+    test('SDK-87 FLT-26 both native plugins push later URLs to Dart as onLinkUrl', () {
+      expect(read('lib/src/deeplinknow.dart'), contains("call.method == 'onLinkUrl'"));
+      expect(read(iosPlugin), contains('invokeMethod("onLinkUrl"'));
+      final kotlin = read('android/src/main/kotlin/com/deeplinknow/flutter/DeepLinkNowPlugin.kt');
+      expect(kotlin, contains('"onLinkUrl"'));
+      expect(kotlin, contains('ActivityAware'));
+      expect(kotlin, contains('PluginRegistry.NewIntentListener'));
+    });
+
+    test('SDK-87 FLT-28 iOS observes app-delegate and scene URLs without claiming or swizzling',
+        () {
+      final swift = read(iosPlugin);
+      expect(swift, contains('registrar.addApplicationDelegate(instance)'));
+      expect(swift, contains('NSSelectorFromString("addSceneDelegate:")'));
+      expect(swift, contains('@objc(scene:openURLContexts:)'));
+      expect(swift, contains('@objc(scene:continueUserActivity:)'));
+      expect(swift, contains('@objc(scene:willConnectToSession:options:)'));
+      expect(swift, isNot(contains('method_exchangeImplementations')));
     });
 
     test('FLT-08 Android runs SDK calls in a plugin scope on the main thread, cancelled on detach',

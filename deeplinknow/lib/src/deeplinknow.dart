@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'errors.dart';
+import 'link.dart';
+import 'resolve_http.dart';
 import 'types.dart';
 
 /// Which kind of call set [DeepLinkNow.lastError]; a success of the same kind clears it (SDK-85).
@@ -22,6 +27,14 @@ enum _CallKind { initialize, check, find }
 ///
 /// The everyday calls never throw (SDK-85): a failure resolves `null` (or `false`), logs one
 /// warning and is kept in [lastError].
+///
+/// Since 1.4.0, [links] delivers every open, deferred or direct, as one [DLNLink] (SDK-86):
+///
+/// ```dart
+/// DeepLinkNow.links.listen((link) => router.go(link.fullPath));
+/// DeepLinkNow.listen();
+/// await DeepLinkNow.initialize('dln_pub_…');
+/// ```
 abstract final class DeepLinkNow {
   /// Plugin version. iOS, Android, React Native and Flutter share major.minor (SDK-84).
   static const String sdkVersion = '1.3.0';
@@ -70,13 +83,22 @@ abstract final class DeepLinkNow {
       final info = DLNAppInfo.fromMap(raw);
       _initialized = true;
       _appInfo = info;
+      _resolveConfig = (
+        apiKey: apiKey,
+        baseUrl: config.baseUrl ?? _defaultBaseUrl,
+        timeout: Duration(milliseconds: config.timeoutMs ?? _defaultTimeoutMs),
+      );
       _succeeded(_CallKind.initialize);
       return info;
     } catch (e) {
       _initialized = false;
       _appInfo = null;
+      _resolveConfig = null;
       _failed(_CallKind.initialize, 'initialize', e);
       return null;
+    } finally {
+      // The link pipeline (listen) waits for the first initialize to finish, either way.
+      if (!_initFinished.isCompleted) _initFinished.complete();
     }
   }
 
@@ -194,6 +216,282 @@ abstract final class DeepLinkNow {
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // One link object for every open (1.4.0, SDK-86…92)
+  // ---------------------------------------------------------------------------------------------
+
+  static const String _defaultBaseUrl = 'https://deeplinknow.com';
+  static const int _defaultTimeoutMs = 10000;
+
+  /// The same URL again within this window is one open (SDK-88, settled across SDKs).
+  static const Duration _replayWindow = Duration(seconds: 3);
+
+  static StreamController<DLNLink> _links = _newLinksController();
+  static DLNLinkOptions _linkOptions = const DLNLinkOptions();
+  static bool _listening = false;
+  static bool _holding = false;
+  // The latest link of each kind, held (SDK-89) or waiting for a listener (SDK-86).
+  static DLNLink? _pendingDeferred;
+  static DLNLink? _pendingDirect;
+  static DLNLink? _undeliveredDeferred;
+  static DLNLink? _undeliveredDirect;
+  static Future<void> _linkQueue = Future<void>.value();
+  static Completer<void> _initFinished = Completer<void>();
+  static ({String apiKey, String baseUrl, Duration timeout})? _resolveConfig;
+  static String? _lastDirectUrl;
+  static DateTime? _lastDirectAt;
+
+  /// The HTTP GET used by resolving (SDK-90). Tests replace it; apps don't need to.
+  @visibleForTesting
+  static DLNHttpGet httpGet = platformHttpGet;
+
+  /// The clock used for the replay window (SDK-88). Tests replace it; apps don't need to.
+  @visibleForTesting
+  static DateTime Function() clock = DateTime.now;
+
+  static StreamController<DLNLink> _newLinksController() =>
+      StreamController<DLNLink>.broadcast(onListen: _replayUndelivered);
+
+  /// Every link the app should open, deferred or direct, as one [DLNLink] (SDK-86).
+  ///
+  /// A broadcast stream. Call [listen] once at startup (before or after [initialize]) to start
+  /// it: links arrive after the first [initialize] call has finished. While nothing listens, the
+  /// latest link of each kind (one deferred, one direct) is kept and replayed once to the next
+  /// listener, deferred first.
+  static Stream<DLNLink> get links => _links.stream;
+
+  /// Starts [links] (SDK-86, SDK-87). Call it once at startup; it doesn't need to wait for
+  /// [initialize].
+  ///
+  /// * Runs the first-launch deferred check once ([checkDeferredDeepLink] with the options'
+  ///   `minConfidence`, `useClipboard` and `force`) after the first [initialize] finishes, and
+  ///   delivers its link as `type: deferred`.
+  /// * Reads the URL that launched the app and every later URL the OS hands it through the
+  ///   plugin's platform code, and delivers as `type: direct` the ones on the app's link domains
+  ///   (Universal Links on iOS, App Links on Android) and the app's custom schemes
+  ///   ([DLNLinkOptions.schemes], else the ones the app declares). The app doesn't forward URLs.
+  ///
+  /// Calling it again only updates the options: [DLNLinkOptions.hold] and
+  /// [DLNLinkOptions.resolve] apply to links delivered after the call; the deferred check is not
+  /// run twice (SDK-91). Never throws.
+  static void listen([DLNLinkOptions options = const DLNLinkOptions()]) {
+    _linkOptions = options;
+    _holding = options.hold;
+    if (_listening) return;
+    _listening = true;
+    channel.setMethodCallHandler(_onNativeCall);
+    _enqueue(() async {
+      await _initFinished.future;
+      final deferred = await checkDeferredDeepLink(
+        minConfidence: _linkOptions.minConfidence,
+        useClipboard: _linkOptions.useClipboard,
+        force: _linkOptions.force,
+      );
+      // Deferred first when both are known at once (SDK-88): the URLs the platform side
+      // buffered are only taken after the deferred check.
+      if (deferred != null) _deliver(DLNLink.fromDeferred(deferred));
+      for (final url in await _startLinks()) {
+        await _handleDirect(url);
+      }
+    });
+  }
+
+  /// The link kept by [DLNLinkOptions.hold] (SDK-89), or `null`: the next one
+  /// [releasePendingLink] delivers. The latest link of each kind is kept (one deferred, one
+  /// direct); when both are held this is the deferred one, and the direct one follows it.
+  static DLNLink? get pendingLink => _pendingDeferred ?? _pendingDirect;
+
+  /// Every held link (SDK-89), deferred first: at most one deferred and one direct. Empty when
+  /// nothing is held. [pendingLink] is the first of them.
+  static List<DLNLink> get pendingLinks =>
+      List.unmodifiable([_pendingDeferred, _pendingDirect].whereType<DLNLink>());
+
+  /// Ends the hold and delivers the held links, deferred first, to [links] (SDK-89). Later
+  /// links are delivered straight away until [listen] is called again with `hold: true`.
+  static void releasePendingLink() {
+    _holding = false;
+    final held = [_pendingDeferred, _pendingDirect];
+    _pendingDeferred = null;
+    _pendingDirect = null;
+    for (final link in held) {
+      if (link != null) _deliver(link);
+    }
+  }
+
+  /// Drops the held links without delivering them (SDK-89). The hold stays on.
+  static void clearPendingLink() {
+    _pendingDeferred = null;
+    _pendingDirect = null;
+  }
+
+  /// Parses [url] with the native rules and looks it up with `GET /api/v1/sdk/resolve`
+  /// (SDK-90), filling `deeplinkId`, `targetUrl`, `campaignId` and `metadata` on a 200.
+  ///
+  /// Resolves `null` when [url] isn't a link on the app's domains or one of its schemes. A
+  /// 404, a timeout (the configured timeout), any other failure, or no successful
+  /// [initialize] gives the link unresolved; a scheme link is never resolved. Never throws.
+  static Future<DLNLink?> resolveLink(String url) async {
+    final link = await _directLink(url);
+    return link == null ? null : _resolve(link);
+  }
+
+  static Future<Object?> _onNativeCall(MethodCall call) async {
+    if (call.method == 'onLinkUrl') {
+      final url = call.arguments;
+      if (url is String) _enqueue(() => _handleDirect(url));
+      return null;
+    }
+    throw MissingPluginException('DeepLinkNow: unknown method ${call.method}');
+  }
+
+  /// The URLs the platform side buffered (the launch URL first); from now on it sends each new
+  /// one with `onLinkUrl`.
+  static Future<List<String>> _startLinks() async {
+    try {
+      final raw = await channel.invokeMethod<List<Object?>>('startLinks');
+      return [...?raw?.whereType<String>()];
+    } catch (e) {
+      _warn('startLinks', e);
+      return const [];
+    }
+  }
+
+  /// Links are handled one at a time, in arrival order.
+  static void _enqueue(Future<void> Function() task) {
+    _linkQueue = _linkQueue.then((_) => task()).then<void>(
+          (_) {},
+          onError: (Object e) => _warn('links', e),
+        );
+  }
+
+  static Future<void> _handleDirect(String url) async {
+    final now = clock();
+    final last = _lastDirectAt;
+    if (url == _lastDirectUrl && last != null && now.difference(last) < _replayWindow) return;
+    _lastDirectUrl = url;
+    _lastDirectAt = now;
+    final link = await _directLink(url);
+    if (link == null) return;
+    _deliver(_linkOptions.resolve ? await _resolve(link) : link);
+  }
+
+  static Future<DLNLink?> _directLink(String url) async {
+    final scheme = schemeOf(url.trim());
+    if (scheme == null) return null;
+    if (scheme == 'http' || scheme == 'https') {
+      final parsed = await parseDeepLink(url);
+      if (parsed == null) return null;
+      final source = defaultTargetPlatform == TargetPlatform.android
+          ? DLNLinkSource.appLink
+          : DLNLinkSource.universalLink;
+      return DLNLink.direct(parsed, source);
+    }
+    return _schemeLink(url.trim(), scheme);
+  }
+
+  /// SDK-87 custom schemes. The path and query go through the native parse (SDK-30…37) as if
+  /// they were on the app's primary domain, so Dart has no query parser (FLT-01); `url` stays
+  /// the scheme URL.
+  static Future<DLNLink?> _schemeLink(String url, String scheme) async {
+    if (systemSchemes.contains(scheme) || !await _isAppScheme(scheme)) return null;
+    // Needs the app's domains: before a successful initialize a scheme open isn't delivered.
+    final host = _appInfo?.primaryDomain;
+    if (host == null || host.isEmpty) return null;
+    final parsed = await parseDeepLink('https://$host${schemePathOf(url)}');
+    if (parsed == null) return null;
+    return DLNLink(
+      type: DLNLinkType.direct,
+      path: parsed.path,
+      queryParams: parsed.queryParams,
+      fullPath: parsed.fullPath,
+      url: stripDlnFragment(url),
+      source: DLNLinkSource.scheme,
+      confidenceScore: 100,
+      matchQuality: MatchQuality.high,
+    );
+  }
+
+  static Future<bool> _isAppScheme(String scheme) async {
+    final listed = _linkOptions.schemes.map((s) => s.toLowerCase()).toSet();
+    if (listed.isNotEmpty) return listed.contains(scheme);
+    try {
+      return await channel.invokeMethod<bool>('isAppScheme', {'scheme': scheme}) ?? false;
+    } catch (e) {
+      _warn('isAppScheme', e);
+      return false;
+    }
+  }
+
+  static void _deliver(DLNLink link) {
+    final deferred = link.type == DLNLinkType.deferred;
+    if (_holding) {
+      deferred ? _pendingDeferred = link : _pendingDirect = link;
+    } else if (_links.hasListener) {
+      _links.add(link);
+    } else {
+      deferred ? _undeliveredDeferred = link : _undeliveredDirect = link;
+    }
+  }
+
+  static void _replayUndelivered() {
+    final waiting = [_undeliveredDeferred, _undeliveredDirect];
+    _undeliveredDeferred = null;
+    _undeliveredDirect = null;
+    for (final link in waiting) {
+      if (link != null) scheduleMicrotask(() => _deliver(link));
+    }
+  }
+
+  static Future<DLNLink> _resolve(DLNLink link) async {
+    final config = _resolveConfig;
+    // Scheme opens are never resolved (SDK-87, SDK-90).
+    if (config == null || link.source == DLNLinkSource.scheme) return link;
+    try {
+      final response = await httpGet(
+        resolveUri(config.baseUrl, link.fullPath),
+        {'x-api-key': config.apiKey, 'accept': 'application/json'},
+        config.timeout,
+      ).timeout(config.timeout);
+      if (response.status == 404) return link;
+      if (response.status != 200) {
+        throw DLNError(
+          _statusCode(response.status),
+          message: 'HTTP ${response.status}',
+          status: response.status,
+        );
+      }
+      final body = jsonDecode(response.body);
+      final deeplink = body is Map ? body['deeplink'] : null;
+      if (deeplink is! Map || deeplink['id'] is! String) {
+        throw const DLNShapeException('resolve response has no deeplink');
+      }
+      final targetUrl = deeplink['target_url'];
+      final campaignId = deeplink['campaign_id'];
+      final metadata = deeplink['metadata'];
+      return link.withResolved(
+        deeplinkId: deeplink['id'] as String,
+        targetUrl: targetUrl is String ? targetUrl : null,
+        campaignId: campaignId is String ? campaignId : null,
+        metadata: metadata is Map ? Map<String, Object?>.from(metadata) : null,
+      );
+    } on TimeoutException {
+      _warn('resolveLink', const DLNError(DLNErrorCode.network, message: 'timed out'));
+      return link;
+    } catch (e) {
+      _warn('resolveLink', e);
+      return link;
+    }
+  }
+
+  static DLNErrorCode _statusCode(int status) => switch (status) {
+        400 => DLNErrorCode.badRequest,
+        401 => DLNErrorCode.invalidApiKey,
+        403 => DLNErrorCode.accountInactive,
+        429 => DLNErrorCode.rateLimited,
+        >= 500 => DLNErrorCode.server,
+        _ => DLNErrorCode.invalidResponse,
+      };
+
   /// Clears the Dart-side state (not the native SDKs).
   @visibleForTesting
   static void resetForTesting() {
@@ -202,6 +500,23 @@ abstract final class DeepLinkNow {
     _lastError = null;
     _lastErrorKind = null;
     logSink = _defaultLog;
+    channel.setMethodCallHandler(null);
+    unawaited(_links.close());
+    _links = _newLinksController();
+    _linkOptions = const DLNLinkOptions();
+    _listening = false;
+    _holding = false;
+    _pendingDeferred = null;
+    _pendingDirect = null;
+    _undeliveredDeferred = null;
+    _undeliveredDirect = null;
+    _linkQueue = Future<void>.value();
+    _initFinished = Completer<void>();
+    _resolveConfig = null;
+    _lastDirectUrl = null;
+    _lastDirectAt = null;
+    httpGet = platformHttpGet;
+    clock = DateTime.now;
   }
 
   static void _succeeded(_CallKind kind) {

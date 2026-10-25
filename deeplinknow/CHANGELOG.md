@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (1.4.0)
+
+Not published; the version is bumped with the native 1.4.0 releases (SDK-84).
+
+- `DeepLinkNow.links`, a broadcast `Stream<DLNLink>` with every open, deferred or direct, started by `DeepLinkNow.listen([DLNLinkOptions])`. The plugin reads the launch URL and later URLs itself: on Android with `ActivityAware` and `onNewIntent`, on iOS with the app-delegate callbacks and, on Flutter 3.38+, the UIScene callbacks. No extra package.
+- Direct opens: https links on your link domains, and your custom schemes (`options.schemes`, or the ones Info.plist or the manifest declares). The same URL twice within 3 seconds is one open. On a first launch with both, the deferred link comes first.
+- `hold`: `pendingLink`, `pendingLinks`, `releasePendingLink()`, `clearPendingLink()`.
+- `resolve` and `resolveLink(url)`: look up a direct open with `GET /api/v1/sdk/resolve` (links imported from Firebase), with the configured timeout. On a 404 or a failure the link is delivered unresolved.
+- A `#dln=` fragment parameter is removed from `url` and `fullPath` in every result.
+- New types: `DLNLink`, `DLNLinkOptions`, `DLNLinkType`, `DLNLinkSource`.
+- Every 1.3.0 call is unchanged.
+- With the iOS SDK 1.4.0 pin, a clipboard link carrying `#dln=` is claimed on the server before it's delivered (SDK-93; native, no plugin code).
+
 ## 1.3.0
 
 First release of the official Flutter plugin. The version matches the native SDKs it wraps (SDK-84): iOS, Android, React Native and Flutter all ship as 1.3.0.

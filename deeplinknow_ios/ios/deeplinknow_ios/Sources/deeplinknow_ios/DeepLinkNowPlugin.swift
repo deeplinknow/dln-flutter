@@ -1,6 +1,8 @@
 import DeepLinkNow
 import Flutter
 import Foundation
+import ObjectiveC
+import UIKit
 
 /// Flutter plugin for DeepLinkNow on iOS. Marshals the `com.deeplinknow/flutter` method channel to
 /// the native `DeepLinkNow` SDK and back (FLT-01). All deferred-link behavior (pasteboard,
@@ -11,17 +13,56 @@ import Foundation
 /// - `checkDeferredDeepLink` / `parseDeepLink` → camelCase.
 /// - `findDeferredUser` → the server's snake_case wire shape.
 /// - errors → `FlutterError(code, message, details{status, serverMessage, causeCode, causeMessage})`.
+///
+/// Since 1.4.0 it also observes the URLs iOS opens the app with (Universal Links through
+/// `NSUserActivity`, and `openURL`) and hands them to Dart (`startLinks`, then `onLinkUrl`) for
+/// `DeepLinkNow.links` (SDK-87, FLT-26). Both lifecycles are covered: the app-delegate callbacks
+/// (`addApplicationDelegate`) and, on Flutter 3.38+, the UIScene callbacks (`addSceneDelegate`,
+/// FLT-28). Every callback returns `false`, so other plugins and Flutter's own deep linking still
+/// see the URL. No swizzling.
 public final class DeepLinkNowPlugin: NSObject, FlutterPlugin {
     static let channelName = "com.deeplinknow/flutter"
 
+    /// The channel, for pushing URLs to Dart. `nil` in unit tests.
+    var channel: FlutterMethodChannel?
+    /// URLs waiting for Dart's `startLinks` (the launch URL first).
+    private(set) var pendingURLs: [String] = []
+    private var dartListening = false
+    /// Replaces the channel push in unit tests: `(url, delivered)`.
+    var pushOverride: ((String, @escaping (Bool) -> Void) -> Void)?
+
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: channelName, binaryMessenger: registrar.messenger())
-        registrar.addMethodCallDelegate(DeepLinkNowPlugin(), channel: channel)
+        let instance = DeepLinkNowPlugin()
+        instance.channel = channel
+        registrar.addMethodCallDelegate(instance, channel: channel)
+        registrar.addApplicationDelegate(instance)
+        registerForSceneEvents(instance, registrar: registrar)
+    }
+
+    /// FLT-28: `FlutterSceneLifeCycleDelegate` and `addSceneDelegate:` exist from Flutter 3.38, but
+    /// the plugin supports Flutter 3.24 (FLT-21), so they are looked up at run time. On 3.38+ the
+    /// class adopts the protocol (the engine checks `conformsToProtocol:`, then
+    /// `respondsToSelector:` for the optional methods below) and registers for scene events; on
+    /// older Flutter nothing happens and the app-delegate callbacks are used.
+    static func registerForSceneEvents(_ instance: DeepLinkNowPlugin, registrar: AnyObject) {
+        guard let proto = NSProtocolFromString("FlutterSceneLifeCycleDelegate") else { return }
+        class_addProtocol(DeepLinkNowPlugin.self, proto)
+        let selector = NSSelectorFromString("addSceneDelegate:")
+        let target = registrar
+        if target.responds(to: selector) {
+            _ = target.perform(selector, with: instance)
+        }
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         let args = call.arguments as? [String: Any] ?? [:]
         switch call.method {
+        case "startLinks":
+            result(startLinks())
+        case "isAppScheme":
+            let scheme = (args["scheme"] as? String)?.lowercased()
+            result(scheme.map { Self.declaredSchemes().contains($0) } ?? false)
         case "initialize":
             let apiKey = args["apiKey"] as? String ?? ""
             let config = args["config"] as? [String: Any] ?? [:]
@@ -61,6 +102,109 @@ public final class DeepLinkNowPlugin: NSObject, FlutterPlugin {
         default:
             result(FlutterMethodNotImplemented)
         }
+    }
+
+    // MARK: - Incoming URLs (SDK-87)
+
+    /// The custom schemes the app declares (`CFBundleURLTypes` → `CFBundleURLSchemes`), lowercased.
+    static func declaredSchemes(_ info: [String: Any]? = Bundle.main.infoDictionary) -> Set<String> {
+        let types = info?["CFBundleURLTypes"] as? [[String: Any]] ?? []
+        return Set(types.flatMap { ($0["CFBundleURLSchemes"] as? [String]) ?? [] }.map { $0.lowercased() })
+    }
+
+    /// A URL iOS opened the app with. Buffered until Dart calls `startLinks`, pushed after. Only
+    /// http(s) and the app's schemes reach here; Dart applies the native parse rules (FLT-01).
+    func offer(_ url: URL?) {
+        guard let url else { return }
+        let string = url.absoluteString
+        guard !string.isEmpty else { return }
+        guard dartListening else {
+            pendingURLs.append(string)
+            return
+        }
+        push(string) { [weak self] delivered in
+            guard let self, !delivered else { return }
+            // No Dart handler (a hot restart): keep it for the next `startLinks`.
+            self.pendingURLs.append(string)
+            self.dartListening = false
+        }
+    }
+
+    /// Dart's `startLinks`: the buffered URLs, and pushing from now on.
+    func startLinks() -> [String] {
+        dartListening = true
+        let urls = pendingURLs
+        pendingURLs.removeAll()
+        return urls
+    }
+
+    private func push(_ url: String, _ delivered: @escaping (Bool) -> Void) {
+        if let pushOverride {
+            pushOverride(url, delivered)
+            return
+        }
+        guard let channel else {
+            delivered(false)
+            return
+        }
+        channel.invokeMethod("onLinkUrl", arguments: url) { reply in
+            if reply is FlutterError {
+                delivered(false)
+            } else if let object = reply as? NSObject, object === FlutterMethodNotImplemented {
+                delivered(false)
+            } else {
+                delivered(true)
+            }
+        }
+    }
+
+    private func offer(_ activity: NSUserActivity) {
+        guard activity.activityType == NSUserActivityTypeBrowsingWeb else { return }
+        offer(activity.webpageURL)
+    }
+
+    // App-delegate lifecycle (apps without UIScene). Cold-start links arrive through these too:
+    // iOS calls them after `didFinishLaunching`.
+
+    public func application(
+        _ application: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+    ) -> Bool {
+        offer(url)
+        return false
+    }
+
+    public func application(
+        _ application: UIApplication,
+        continue userActivity: NSUserActivity,
+        restorationHandler: @escaping ([Any]) -> Void
+    ) -> Bool {
+        offer(userActivity)
+        return false
+    }
+
+    // UIScene lifecycle (Flutter 3.38+, FLT-28). Objective-C selectors of
+    // `FlutterSceneLifeCycleDelegate`; the Swift names differ so they never clash with UIKit's.
+
+    @objc(scene:willConnectToSession:options:)
+    func dlnScene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions?) -> Bool {
+        guard let options else { return false }
+        options.urlContexts.forEach { offer($0.url) }
+        options.userActivities.forEach { offer($0) }
+        return false
+    }
+
+    @objc(scene:openURLContexts:)
+    func dlnScene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) -> Bool {
+        contexts.forEach { offer($0.url) }
+        return false
+    }
+
+    @objc(scene:continueUserActivity:)
+    func dlnScene(_ scene: UIScene, continue userActivity: NSUserActivity) -> Bool {
+        offer(userActivity)
+        return false
     }
 
     // MARK: - Async plumbing

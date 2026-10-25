@@ -1,6 +1,7 @@
 package com.deeplinknow.flutter
 
 import android.content.Context
+import android.content.Intent
 import com.deeplinknow.DLN
 import com.deeplinknow.DLNAppInfo
 import com.deeplinknow.DLNConfig
@@ -9,8 +10,12 @@ import com.deeplinknow.MatchResponse
 import com.deeplinknow.ParsedDeepLink
 import com.deeplinknow.ReferrerData
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.PluginRegistry
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -73,16 +78,58 @@ object DefaultDLNBackend : DLNBackend {
  * to dln-android and back (FLT-01). Every `suspend` SDK call runs in a plugin-owned scope on the
  * main thread (results must be delivered there), and the scope is cancelled when the engine
  * detaches (FLT-08).
+ *
+ * Since 1.4.0 it also reads the URL that launched the activity and every `onNewIntent` URL, and
+ * hands them to Dart (`startLinks`, then `onLinkUrl`) for `DeepLinkNow.links` (SDK-87, FLT-26).
+ * It only observes: `onNewIntent` returns `false`, so other plugins still see the intent.
  */
 class DeepLinkNowPlugin internal constructor(
     private val backend: DLNBackend,
-) : FlutterPlugin, MethodChannel.MethodCallHandler {
+) : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware, PluginRegistry.NewIntentListener {
 
     constructor() : this(DefaultDLNBackend)
 
     private var channel: MethodChannel? = null
     private var context: Context? = null
     private var scope = newScope()
+    private var activityBinding: ActivityPluginBinding? = null
+
+    /** The last intent read, so `onCreate` + `onNewIntent` with the same intent is one open (SDK-88). */
+    private var lastIntent: WeakReference<Intent>? = null
+
+    /**
+     * SDK-87: whether the app's manifest declares [scheme] in a VIEW intent filter (an activity of
+     * this package answers `scheme://`). Tests replace it.
+     */
+    internal var declaresScheme: (String) -> Boolean = { scheme ->
+        val ctx = context
+        if (ctx == null) {
+            false
+        } else {
+            val probe = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("$scheme://dln"))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+                .setPackage(ctx.packageName)
+            @Suppress("DEPRECATION")
+            ctx.packageManager.queryIntentActivities(probe, 0).isNotEmpty()
+        }
+    }
+
+    internal val links = DLNLinkRelay { url, delivered ->
+        val ch = channel
+        if (ch == null) {
+            delivered(false)
+        } else {
+            ch.invokeMethod(
+                "onLinkUrl",
+                url,
+                object : MethodChannel.Result {
+                    override fun success(result: Any?) = delivered(true)
+                    override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) = delivered(false)
+                    override fun notImplemented() = delivered(false)
+                },
+            )
+        }
+    }
 
     private fun newScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -97,6 +144,48 @@ class DeepLinkNowPlugin internal constructor(
         channel = null
         scope.cancel()
         context = null
+        links.stop()
+    }
+
+    // ActivityAware: the launch intent and later intents (SDK-87).
+
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        attachActivity(binding)
+        handleIntent(binding.activity.intent)
+    }
+
+    /** A rotation re-attaches the same activity: its intent was already read. */
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) = attachActivity(binding)
+
+    override fun onDetachedFromActivityForConfigChanges() = detachActivity()
+
+    override fun onDetachedFromActivity() = detachActivity()
+
+    override fun onNewIntent(intent: Intent): Boolean {
+        handleIntent(intent)
+        return false
+    }
+
+    private fun attachActivity(binding: ActivityPluginBinding) {
+        activityBinding = binding
+        binding.addOnNewIntentListener(this)
+    }
+
+    private fun detachActivity() {
+        activityBinding?.removeOnNewIntentListener(this)
+        activityBinding = null
+    }
+
+    /** Forwards a link intent's URL once per intent object; never throws (SDK-50). */
+    internal fun handleIntent(intent: Intent?) {
+        if (intent == null || lastIntent?.get() === intent) return
+        try {
+            val url = DLNLinkRelay.urlOf(intent.action, intent.dataString, intent.flags) ?: return
+            lastIntent = WeakReference(intent)
+            links.offer(url)
+        } catch (e: Exception) {
+            // A malformed intent is not a link.
+        }
     }
 
     /** For tests: the context the plugin passes to `DLN.init`. */
@@ -137,6 +226,11 @@ class DeepLinkNowPlugin internal constructor(
                 "parseDeepLink" -> {
                     val url = call.argument<String>("url")
                     result.success(url?.let { backend.parseDeepLink(it) }?.let { DLNFlutterConverters.parsed(it) })
+                }
+                "startLinks" -> result.success(links.start())
+                "isAppScheme" -> {
+                    val scheme = call.argument<String>("scheme")?.lowercase()
+                    result.success(scheme != null && declaresScheme(scheme))
                 }
                 "isValidDomain" -> {
                     val host = call.argument<String>("host")

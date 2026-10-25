@@ -89,4 +89,70 @@ class RunnerTests: XCTestCase {
   func test_FLT_01_unknownMethodsAreNotImplemented() {
     XCTAssertTrue((call("getPlatformVersion") as AnyObject) === FlutterMethodNotImplemented)
   }
+
+  // MARK: - Incoming URLs (SDK-87, FLT-26…28)
+
+  func test_SDK_87_FLT_26_launchURLsAreBufferedUntilStartLinks() {
+    let link = URL(string: "https://myapp.deeplinknow.com/launch?x=1")!
+    XCTAssertFalse(plugin.application(UIApplication.shared, open: link, options: [:]),
+                   "observes only: never claims the URL")
+    XCTAssertEqual(call("startLinks") as? [String], ["https://myapp.deeplinknow.com/launch?x=1"])
+    XCTAssertEqual(call("startLinks") as? [String], [], "taken once")
+  }
+
+  func test_SDK_87_FLT_26_universalLinksArriveThroughTheUserActivity() {
+    let web = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
+    web.webpageURL = URL(string: "https://myapp.deeplinknow.com/ul")
+    let other = NSUserActivity(activityType: "com.example.handoff")
+    other.webpageURL = URL(string: "https://myapp.deeplinknow.com/not-a-link")
+    XCTAssertFalse(plugin.application(UIApplication.shared, continue: web, restorationHandler: { _ in }))
+    _ = plugin.application(UIApplication.shared, continue: other, restorationHandler: { _ in })
+    XCTAssertEqual(plugin.startLinks(), ["https://myapp.deeplinknow.com/ul"])
+  }
+
+  func test_SDK_87_FLT_26_afterStartLinksURLsArePushed_andAFailedPushIsBufferedAgain() {
+    var pushed: [String] = []
+    var answer = true
+    plugin.pushOverride = { url, delivered in
+      pushed.append(url)
+      delivered(answer)
+    }
+    XCTAssertEqual(plugin.startLinks(), [])
+    _ = plugin.application(UIApplication.shared, open: URL(string: "https://a.deeplinknow.com/1")!, options: [:])
+    XCTAssertEqual(pushed, ["https://a.deeplinknow.com/1"])
+    answer = false // no Dart handler (hot restart)
+    _ = plugin.application(UIApplication.shared, open: URL(string: "https://a.deeplinknow.com/2")!, options: [:])
+    _ = plugin.application(UIApplication.shared, open: URL(string: "https://a.deeplinknow.com/3")!, options: [:])
+    XCTAssertEqual(pushed, ["https://a.deeplinknow.com/1", "https://a.deeplinknow.com/2"])
+    XCTAssertEqual(plugin.startLinks(), ["https://a.deeplinknow.com/2", "https://a.deeplinknow.com/3"])
+  }
+
+  func test_FLT_28_answersTheFlutterSceneLifeCycleSelectors() {
+    for name in ["scene:willConnectToSession:options:", "scene:openURLContexts:", "scene:continueUserActivity:"] {
+      XCTAssertTrue(plugin.responds(to: NSSelectorFromString(name)), name)
+    }
+  }
+
+  func test_FLT_28_adoptsTheSceneProtocolWhenTheEngineHasIt() throws {
+    let proto = try XCTUnwrap(NSProtocolFromString("FlutterSceneLifeCycleDelegate"),
+                              "this example builds with Flutter 3.38+")
+    final class Registrar: NSObject {
+      var sceneDelegates: [AnyObject] = []
+      @objc(addSceneDelegate:) func addSceneDelegate(_ delegate: AnyObject) { sceneDelegates.append(delegate) }
+    }
+    let registrar = Registrar()
+    DeepLinkNowPlugin.registerForSceneEvents(plugin, registrar: registrar)
+    XCTAssertTrue(plugin.conforms(to: proto))
+    XCTAssertTrue(registrar.sceneDelegates.first === plugin)
+  }
+
+  func test_SDK_87_FLT_26_declaredSchemesComeFromCFBundleURLTypes() {
+    let info: [String: Any] = ["CFBundleURLTypes": [
+      ["CFBundleURLSchemes": ["MyApp", "myapp-dev"]],
+      ["CFBundleURLName": "no schemes"],
+    ]]
+    XCTAssertEqual(DeepLinkNowPlugin.declaredSchemes(info), ["myapp", "myapp-dev"])
+    XCTAssertEqual(DeepLinkNowPlugin.declaredSchemes([:]), [])
+    XCTAssertEqual(call("isAppScheme", [:]) as? Bool, false)
+  }
 }
