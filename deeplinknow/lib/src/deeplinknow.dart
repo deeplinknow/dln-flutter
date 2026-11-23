@@ -37,7 +37,7 @@ enum _CallKind { initialize, check, find }
 /// ```
 abstract final class DeepLinkNow {
   /// Plugin version. iOS, Android, React Native and Flutter share major.minor (SDK-84).
-  static const String sdkVersion = '1.4.1';
+  static const String sdkVersion = '1.4.2';
 
   /// The method channel to the native plugin.
   @visibleForTesting

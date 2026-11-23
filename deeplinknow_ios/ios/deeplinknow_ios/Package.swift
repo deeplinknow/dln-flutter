@@ -16,7 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(name: "FlutterFramework", path: "../FlutterFramework"),
-        .package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.1")),
+        .package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.2")),
     ],
     targets: [
         .target(

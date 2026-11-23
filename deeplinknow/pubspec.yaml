@@ -3,7 +3,7 @@ description: >-
   Privacy-first deferred deep linking for Flutter. Wraps the native DeepLinkNow iOS and
   Android SDKs: one call to initialize, one call to get the link the user tapped before
   installing. No attribution, no ad tracking.
-version: 1.4.1
+version: 1.4.2
 homepage: https://deeplinknow.com
 documentation: https://deeplinknow.com/docs/flutter
 repository: https://github.com/deeplinknow/dln-flutter/tree/main/deeplinknow
@@ -24,7 +24,7 @@ dependencies:
     sdk: flutter
   # iOS implementation (a separate package because a pod / Swift package named `deeplinknow`
   # collides with the native `DeepLinkNow` module on case-insensitive file systems, FLT-23).
-  deeplinknow_ios: '>=1.4.0 <1.5.0'
+  deeplinknow_ios: '>=1.4.2 <1.5.0'
 
 dev_dependencies:
   flutter_test:

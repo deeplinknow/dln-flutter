@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.2 (unreleased)
+
+- Depends on the iOS `DeepLinkNow` SDK `~> 1.4.2` (CocoaPods) or `dln-ios` from `1.4.2` (Swift Package Manager), which removes the `itms-services` string App Review rejected an app for (IOS-42). No plugin code change.
+
 ## 1.4.1 (2026-10-25)
 
 - Depends on the iOS `DeepLinkNow` SDK `~> 1.4.1` (CocoaPods) or `dln-ios` from `1.4.1` (Swift Package Manager), which carries the iOS fixes. No plugin code change.

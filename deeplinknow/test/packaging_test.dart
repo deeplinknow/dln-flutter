@@ -28,12 +28,13 @@ void main() {
       expect(DeepLinkNow.sdkVersion, startsWith('1.4.'));
     });
 
-    test('FLT-02 deeplinknow_ios has the same version and deeplinknow pins its minor', () {
+    test('FLT-02 deeplinknow_ios has the same version and deeplinknow pins its minor from 1.4.2', () {
       final version = pubspecVersion();
       final minor = version.substring(0, version.lastIndexOf('.'));
       final nextMinor = '${minor.split('.')[0]}.${int.parse(minor.split('.')[1]) + 1}.0';
       expect(read(iosPubspec), contains('version: $version'));
-      expect(read('pubspec.yaml'), contains("  deeplinknow_ios: '>=$minor.0 <$nextMinor'"));
+      // From 1.4.2 the lower bound is 1.4.2: older deeplinknow_ios allow the iOS build App Review rejected (IOS-42).
+      expect(read('pubspec.yaml'), contains("  deeplinknow_ios: '>=$minor.2 <$nextMinor'"));
       expect(read('../deeplinknow_ios/CHANGELOG.md'), contains('## ${pubspecVersion()}'));
     });
 
@@ -48,8 +49,8 @@ void main() {
   });
 
   group('native SDK pins', () {
-    test('FLT-03 iOS CocoaPods depends on DeepLinkNow ~> 1.4.1', () {
-      expect(read(iosPodspec), contains("s.dependency 'DeepLinkNow', '~> 1.4.1'"));
+    test('FLT-03 iOS CocoaPods depends on DeepLinkNow ~> 1.4.2', () {
+      expect(read(iosPodspec), contains("s.dependency 'DeepLinkNow', '~> 1.4.2'"));
     });
 
     test('FLT-03 iOS Swift Package Manager depends on dln-ios from 1.4.1 (same minor)', () {
@@ -57,14 +58,14 @@ void main() {
       expect(
         manifest,
         contains(
-            '.package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.1"))'),
+            '.package(url: "https://github.com/deeplinknow/dln-ios", .upToNextMinor(from: "1.4.2"))'),
       );
       expect(manifest, contains('.product(name: "DeepLinkNow", package: "dln-ios")'));
     });
 
-    test('FLT-03 Android depends on com.deeplinknow:dln-android:1.4.1', () {
+    test('FLT-03 Android depends on com.deeplinknow:dln-android:1.4.2', () {
       expect(read('android/build.gradle.kts'),
-          contains('implementation("com.deeplinknow:dln-android:1.4.1")'));
+          contains('implementation("com.deeplinknow:dln-android:1.4.2")'));
     });
   });
 

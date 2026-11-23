@@ -2,7 +2,7 @@ name: deeplinknow_ios
 description: >-
   iOS implementation of the deeplinknow plugin. Wraps the native DeepLinkNow iOS SDK. Add
   `deeplinknow` to your app, not this package; it is endorsed and installed automatically.
-version: 1.4.1
+version: 1.4.2
 homepage: https://deeplinknow.com
 documentation: https://deeplinknow.com/docs/flutter
 repository: https://github.com/deeplinknow/dln-flutter/tree/main/deeplinknow_ios
