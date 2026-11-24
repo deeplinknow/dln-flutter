@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.2 (unreleased)
+## 1.4.2 (2026-11-24)
 
 Pins `com.deeplinknow:dln-android:1.4.2` and `deeplinknow_ios` 1.4.2, which pins iOS `DeepLinkNow` `~> 1.4.2` (SDK-84, FLT-03). No Dart changes.
 
